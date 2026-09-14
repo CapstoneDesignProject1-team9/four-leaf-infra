@@ -2,7 +2,7 @@
 
 > **Four-Leaf** 프로젝트의 인프라 & CD(Continuous Deployment) 레포지토리입니다.  
 > 각 서비스 레포에서 CI(빌드/테스트/린트) 통과 후 `main` 브랜치에 push가 발생하면  
-> 자동으로 AWS ECR에 이미지를 push하고 EC2 서버에 배포됩니다.
+> 자동으로 **네이버클라우드 Container Registry(NCR)**에 이미지를 push하고 **NCP Server**에 배포됩니다.
 
 ---
 
@@ -22,7 +22,7 @@
 
 ---
 
-## 🏗 아키텍처
+## 🏗 아키텍처 (Naver Cloud Platform 중심)
 
 ```
 [GitHub Organization: CapstoneDesignProject1-team9]
@@ -30,25 +30,25 @@
  four-laef-frontend  (React/Vite)
    └── push to main
          ├── CI: npm build + lint                     ← ci.yml
-         └── CD trigger: ECR push → dispatch ─────────────────┐
+         └── CD trigger: NCR push → dispatch ─────────────────┐
                                                                 │ repository_dispatch
  four-leaf-backend  (Spring Boot)                              │
    └── push to main                                            │
          ├── CI: Gradle build + test                 ← ci.yml  │
-         └── CD trigger: ECR push → dispatch ─────────────────►│
+         └── CD trigger: NCR push → dispatch ─────────────────►│
                                                                 │
- four-leaf-AI  (Python/LangChain)                              │
+ four-leaf-AI  (Python/LangChain + HyperCLOVA X)               │
    └── push to main                                            │
          ├── CI: ruff lint + pytest                  ← ci.yml  │
-         └── CD trigger: ECR push → dispatch ─────────────────►│
+         └── CD trigger: NCR push → dispatch ─────────────────►│
                                                                 ▼
                                                     [four-leaf-infra]
                                                     deploy-*.yml
-                                                    EC2 SSH → docker compose up
+                                                    NCP Server SSH → NCR Login → docker compose up
 ```
 
 ```
-EC2 Server
+NCP Server (Ubuntu)
 ┌──────────────────────────────────────┐
 │  Nginx (80 / 443)                    │
 │   ├── /        → Frontend  :3000     │
@@ -82,10 +82,6 @@ four-leaf-infra/
 │   ├── deploy.sh                 # 배포 실행 스크립트
 │   ├── rollback.sh               # 롤백 스크립트
 │   └── health-check.sh           # 헬스체크 스크립트
-├── service-repos/                # 각 서비스 레포에 복사할 워크플로우 템플릿
-│   ├── frontend-trigger.yml      → four-laef-frontend: .github/workflows/trigger-cd.yml
-│   ├── backend-trigger.yml       → four-leaf-backend:  .github/workflows/trigger-cd.yml
-│   └── ai-trigger.yml            → four-leaf-AI:       .github/workflows/trigger-cd.yml
 ├── docker-compose.yml            # 프로덕션 전체 스택
 ├── docker-compose.dev.yml        # 로컬 개발용
 └── .env.example                  # 환경변수 템플릿
@@ -108,7 +104,7 @@ four-leaf-infra/
 
 ## 🛠 사전 준비
 
-### EC2 서버 초기 설정 (최초 1회)
+### NCP Server 초기 설정 (최초 1회)
 
 ```bash
 # 1. Docker & Docker Compose 설치
@@ -116,31 +112,21 @@ curl -fsSL https://get.docker.com | sh
 sudo usermod -aG docker $USER
 newgrp docker
 
-# 2. AWS CLI 설치
-curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
-unzip awscliv2.zip && sudo ./aws/install
-
-# 3. AWS 자격증명 설정
-#    IAM 역할 사용 시: EC2 인스턴스에 ECR 읽기 권한 역할 부여 (권장)
-#    직접 설정 시:
-aws configure
-
-# 4. infra 레포 clone
+# 2. infra 레포 clone
 git clone https://github.com/CapstoneDesignProject1-team9/four-leaf-infra.git ~/four-leaf-infra
 cd ~/four-leaf-infra
 
-# 5. 환경변수 파일 설정
+# 3. 환경변수 파일 설정
 cp .env.example .env
 nano .env   # 실제 값 입력
 ```
 
-### AWS ECR 레포지토리 생성 (최초 1회)
+### NCP Container Registry 생성 (최초 1회)
 
-```bash
-aws ecr create-repository --repository-name four-leaf-frontend --region ap-northeast-2
-aws ecr create-repository --repository-name four-leaf-backend  --region ap-northeast-2
-aws ecr create-repository --repository-name four-leaf-ai       --region ap-northeast-2
-```
+네이버클라우드 콘솔 → **Container Registry** 에서 레지스트리(예: `my-ncr`) 생성 후 각 이미지 리포지토리 생성.
+- `four-leaf-frontend`
+- `four-leaf-backend`
+- `four-leaf-ai`
 
 ---
 
@@ -152,12 +138,12 @@ aws ecr create-repository --repository-name four-leaf-ai       --region ap-north
 
 | Secret 이름 | 값 예시 | 설명 |
 |------------|---------|------|
-| `DEPLOY_HOST` | `13.125.xxx.xxx` | EC2 퍼블릭 IP 또는 도메인 |
-| `DEPLOY_USER` | `ubuntu` | SSH 접속 유저명 |
+| `DEPLOY_HOST` | `211.xxx.xxx.xxx` | NCP Server 공인 IP |
+| `DEPLOY_USER` | `root` (또는 지정유저) | SSH 접속 유저명 |
 | `DEPLOY_SSH_KEY` | `-----BEGIN OPENSSH...` | SSH private key 전체 내용 |
 | `DEPLOY_PORT` | `22` | SSH 포트 |
-| `AWS_ACCESS_KEY_ID` | `AKIA...` | IAM Access Key ID |
-| `AWS_SECRET_ACCESS_KEY` | `...` | IAM Secret Access Key |
+| `NCP_ACCESS_KEY` | `...` | 네이버클라우드 API 인증키 (Access Key) |
+| `NCP_SECRET_KEY` | `...` | 네이버클라우드 API 인증키 (Secret Key) |
 | `MAIL_SERVER` | `smtp.gmail.com` | SMTP 서버 |
 | `MAIL_PORT` | `587` | SMTP 포트 |
 | `MAIL_USERNAME` | `noreply@example.com` | 발신 이메일 |
@@ -167,39 +153,21 @@ aws ecr create-repository --repository-name four-leaf-ai       --region ap-north
 > **SSH 키 생성:**
 > ```bash
 > ssh-keygen -t ed25519 -C "four-leaf-deploy" -f ~/.ssh/four-leaf-deploy
-> # 공개키를 EC2에 등록
-> cat ~/.ssh/four-leaf-deploy.pub >> ~/.ssh/authorized_keys   # (EC2에서 실행)
+> # 공개키를 NCP Server에 등록
+> cat ~/.ssh/four-leaf-deploy.pub >> ~/.ssh/authorized_keys   # (서버에서 실행)
 > # 비밀키를 DEPLOY_SSH_KEY Secret에 등록
 > cat ~/.ssh/four-leaf-deploy   # 이 내용 전체를 복사
 > ```
 
-> **Gmail 앱 비밀번호:** [Google 계정](https://myaccount.google.com) → 보안 → 2단계 인증 → 앱 비밀번호
-
 ---
 
-### `four-laef-frontend` 레포 Secrets
+### 각 서비스 레포(`frontend`, `backend`, `AI`) Secrets
 
 | Secret 이름 | 설명 |
 |------------|------|
-| `AWS_ACCESS_KEY_ID` | IAM Key (ECR push 권한) |
-| `AWS_SECRET_ACCESS_KEY` | IAM Secret |
+| `NCP_ACCESS_KEY` | NCR push 권한 |
+| `NCP_SECRET_KEY` | NCR push 권한 |
 | `INFRA_DISPATCH_TOKEN` | infra 레포에 `repo` 권한 있는 PAT |
-
-### `four-leaf-backend` 레포 Secrets
-
-| Secret 이름 | 설명 |
-|------------|------|
-| `AWS_ACCESS_KEY_ID` | IAM Key |
-| `AWS_SECRET_ACCESS_KEY` | IAM Secret |
-| `INFRA_DISPATCH_TOKEN` | 동일한 PAT |
-
-### `four-leaf-AI` 레포 Secrets
-
-| Secret 이름 | 설명 |
-|------------|------|
-| `AWS_ACCESS_KEY_ID` | IAM Key |
-| `AWS_SECRET_ACCESS_KEY` | IAM Secret |
-| `INFRA_DISPATCH_TOKEN` | 동일한 PAT |
 
 > **INFRA_DISPATCH_TOKEN 발급:**  
 > GitHub → Settings → Developer settings → Personal access tokens (classic)  
@@ -209,14 +177,14 @@ aws ecr create-repository --repository-name four-leaf-ai       --region ap-north
 
 ## ⚙️ 각 서비스 레포 설정 (최초 1회)
 
-각 서비스 레포에는 이미 다음 두 워크플로우 파일이 포함되어 있어야 합니다:
+각 서비스 레포에는 이미 다음 두 워크플로우 파일이 포함되어 있습니다:
 
 | 파일 | 역할 |
 |------|------|
 | `.github/workflows/ci.yml` | PR/push 시 CI (빌드, 테스트, 린트) |
-| `.github/workflows/trigger-cd.yml` | main push 시 CI → ECR push → infra dispatch |
+| `.github/workflows/trigger-cd.yml` | main push 시 CI → NCR push → infra dispatch |
 
-> 이미 생성되어 있습니다. Secrets만 등록하면 바로 동작합니다.
+> Secrets만 등록하면 바로 동작합니다.
 
 ---
 
@@ -236,13 +204,13 @@ aws ecr create-repository --repository-name four-leaf-ai       --region ap-north
          ▼
 3. trigger-cd.yml 실행 (needs: ci)
    - Docker image build
-   - AWS ECR push (SHA tag + latest)
+   - NCP NCR push (SHA tag + latest)
    - repository_dispatch → four-leaf-infra
          │
          ▼
 4. four-leaf-infra deploy-*.yml 실행
-   - EC2 SSH 접속
-   - ECR 이미지 pull
+   - NCP Server SSH 접속
+   - NCR 이미지 pull
    - .env 파일 IMAGE 주소 업데이트 (sed, 원자적)
    - docker compose up -d --no-deps
    - health-check.sh 실행
@@ -284,10 +252,7 @@ docker compose -f docker-compose.dev.yml up -d
 # 3. 로그 확인
 docker compose -f docker-compose.dev.yml logs -f
 
-# 4. 특정 서비스 로그
-docker compose -f docker-compose.dev.yml logs -f backend
-
-# 5. 종료
+# 4. 종료
 docker compose -f docker-compose.dev.yml down
 ```
 
@@ -302,79 +267,18 @@ docker compose -f docker-compose.dev.yml down
 1. `Actions` 탭 → `Deploy Frontend` (또는 Backend/AI)
 2. `Run workflow` → 이전 commit SHA 입력
 
-### EC2 서버에서 긴급 롤백
-
-```bash
-cd ~/four-leaf-infra
-
-# 이전 이미지 태그 확인 (ECR 콘솔 또는)
-aws ecr list-images --repository-name four-leaf-frontend --region ap-northeast-2
-
-# 롤백 스크립트 사용
-bash scripts/rollback.sh frontend <이전-SHA>
-bash scripts/rollback.sh backend  <이전-SHA>
-bash scripts/rollback.sh ai       <이전-SHA>
-```
-
----
-
-## 🔧 트러블슈팅
-
-### ECR 로그인 실패 (EC2에서)
-
-```bash
-# AWS CLI 자격증명 확인
-aws sts get-caller-identity
-
-# ECR 로그인 테스트
-aws ecr get-login-password --region ap-northeast-2 | \
-  docker login --username AWS --password-stdin <account-id>.dkr.ecr.ap-northeast-2.amazonaws.com
-```
-
-### 컨테이너가 시작 안 될 때
-
-```bash
-docker compose logs frontend   # 서비스별 로그
-docker compose logs backend
-docker compose logs ai
-docker compose ps              # 컨테이너 상태
-```
-
-### 헬스체크 실패
-
-```bash
-# 서비스별 직접 확인
-curl http://localhost:3000              # Frontend
-curl http://localhost:8080/actuator/health  # Backend
-curl http://localhost:8000/health      # AI
-```
-
-### repository_dispatch 가 안 오는 경우
-
-1. 서비스 레포의 `INFRA_DISPATCH_TOKEN` Secret 확인 (만료 여부)
-2. PAT의 `repo` 스코프 확인
-3. `trigger-cd.yml`의 `repository:` 값이 `CapstoneDesignProject1-team9/four-leaf-infra` 인지 확인
-4. 서비스 레포 Actions 탭에서 `trigger-cd.yml` 워크플로우 실행 로그 확인
-
-### Nginx 설정 문제
-
-```bash
-docker compose exec nginx nginx -t        # 설정 문법 검사
-docker compose exec nginx nginx -s reload  # 설정 리로드
-```
-
 ---
 
 ## 📌 GitHub Secrets 한눈에 보기
 
 | Secret | infra | frontend | backend | AI | 설명 |
 |--------|:-----:|:--------:|:-------:|:--:|------|
-| `DEPLOY_HOST` | ✅ | | | | EC2 IP |
+| `DEPLOY_HOST` | ✅ | | | | NCP Server IP |
 | `DEPLOY_USER` | ✅ | | | | SSH 유저 |
 | `DEPLOY_SSH_KEY` | ✅ | | | | SSH private key |
 | `DEPLOY_PORT` | ✅ | | | | SSH 포트 |
-| `AWS_ACCESS_KEY_ID` | ✅ | ✅ | ✅ | ✅ | IAM Key |
-| `AWS_SECRET_ACCESS_KEY` | ✅ | ✅ | ✅ | ✅ | IAM Secret |
+| `NCP_ACCESS_KEY` | ✅ | ✅ | ✅ | ✅ | NCP Access Key |
+| `NCP_SECRET_KEY` | ✅ | ✅ | ✅ | ✅ | NCP Secret Key |
 | `MAIL_SERVER` | ✅ | | | | SMTP 서버 |
 | `MAIL_PORT` | ✅ | | | | SMTP 포트 |
 | `MAIL_USERNAME` | ✅ | | | | 발신 메일 |

@@ -12,9 +12,6 @@ on:
         required: false
         default: "latest"
 
-env:
-  AWS_REGION: ap-northeast-2
-  ECR_REPOSITORY: four-leaf-backend
 
 jobs:
   deploy:
@@ -40,42 +37,32 @@ jobs:
             echo "TRIGGER_URL=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" >> $GITHUB_ENV
           fi
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
 
-      - name: Get ECR registry
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
-
-      - name: Deploy to EC2 via SSH
+      - name: Deploy to Server via SSH
         uses: appleboy/ssh-action@v1.0.3
         env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          ECR_REPO: ${{ env.ECR_REPOSITORY }}
+          NCR_REGISTRY: my-ncr.kr.ncr.ntruss.com
+          NCR_USERNAME: ${{ secrets.NCP_ACCESS_KEY }}
+          NCR_PASSWORD: ${{ secrets.NCP_SECRET_KEY }}
+          IMAGE_NAME: four-leaf-backend
           IMAGE_TAG: ${{ env.IMAGE_TAG }}
-          AWS_REGION: ${{ env.AWS_REGION }}
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           port: ${{ secrets.DEPLOY_PORT || 22 }}
-          envs: ECR_REGISTRY,ECR_REPO,IMAGE_TAG,AWS_REGION
+          envs: NCR_REGISTRY,NCR_USERNAME,NCR_PASSWORD,IMAGE_NAME,IMAGE_TAG
           script: |
             set -e
             cd ~/four-leaf-infra
 
-            NEW_IMAGE="${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}"
+            NEW_IMAGE="${NCR_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}"
             echo "▶ 배포할 이미지: $NEW_IMAGE"
 
-            # ECR 로그인
-            aws ecr get-login-password --region "$AWS_REGION" | \
-              docker login --username AWS --password-stdin "$ECR_REGISTRY"
+            # NCR 로그인
+            echo "$NCR_PASSWORD" | docker login --username "$NCR_USERNAME" --password-stdin "$NCR_REGISTRY"
 
-            # .env 파일에서 BACKEND_IMAGE 값만 원자적으로 업데이트
+            # .env 파일 업데이트
             if grep -q "^BACKEND_IMAGE=" .env 2>/dev/null; then
               sed -i "s|^BACKEND_IMAGE=.*|BACKEND_IMAGE=${NEW_IMAGE}|" .env
             else
@@ -89,7 +76,7 @@ jobs:
             # 이전 이미지 정리
             docker image prune -f > /dev/null 2>&1 || true
 
-            # 헬스체크 (Spring Boot Actuator)
+            # 헬스체크
             bash scripts/health-check.sh backend
 
       - name: Send success notification
