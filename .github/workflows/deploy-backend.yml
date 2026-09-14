@@ -1,0 +1,144 @@
+name: Deploy Backend
+
+on:
+  # four-leaf-backend 레포에서 보내는 dispatch 이벤트
+  repository_dispatch:
+    types: [deploy-backend]
+  # 수동 트리거
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Docker image tag (default: latest)"
+        required: false
+        default: "latest"
+
+env:
+  AWS_REGION: ap-northeast-2
+  ECR_REPOSITORY: four-leaf-backend
+
+jobs:
+  deploy:
+    name: Deploy Backend to EC2
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout infra repo
+        uses: actions/checkout@v4
+
+      - name: Set variables
+        id: vars
+        run: |
+          if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+            echo "IMAGE_TAG=${{ github.event.client_payload.image_tag }}" >> $GITHUB_ENV
+            echo "SHA=${{ github.event.client_payload.sha }}" >> $GITHUB_ENV
+            echo "ACTOR=${{ github.event.client_payload.actor }}" >> $GITHUB_ENV
+            echo "TRIGGER_URL=${{ github.event.client_payload.run_url }}" >> $GITHUB_ENV
+          else
+            echo "IMAGE_TAG=${{ github.event.inputs.image_tag || 'latest' }}" >> $GITHUB_ENV
+            echo "SHA=manual" >> $GITHUB_ENV
+            echo "ACTOR=${{ github.actor }}" >> $GITHUB_ENV
+            echo "TRIGGER_URL=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" >> $GITHUB_ENV
+          fi
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Get ECR registry
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Deploy to EC2 via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPO: ${{ env.ECR_REPOSITORY }}
+          IMAGE_TAG: ${{ env.IMAGE_TAG }}
+          AWS_REGION: ${{ env.AWS_REGION }}
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ secrets.DEPLOY_PORT || 22 }}
+          envs: ECR_REGISTRY,ECR_REPO,IMAGE_TAG,AWS_REGION
+          script: |
+            set -e
+            cd ~/four-leaf-infra
+
+            NEW_IMAGE="${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}"
+            echo "▶ 배포할 이미지: $NEW_IMAGE"
+
+            # ECR 로그인
+            aws ecr get-login-password --region "$AWS_REGION" | \
+              docker login --username AWS --password-stdin "$ECR_REGISTRY"
+
+            # .env 파일에서 BACKEND_IMAGE 값만 원자적으로 업데이트
+            if grep -q "^BACKEND_IMAGE=" .env 2>/dev/null; then
+              sed -i "s|^BACKEND_IMAGE=.*|BACKEND_IMAGE=${NEW_IMAGE}|" .env
+            else
+              echo "BACKEND_IMAGE=${NEW_IMAGE}" >> .env
+            fi
+
+            # 새 이미지 pull & 서비스 재시작
+            docker compose pull backend
+            docker compose up -d --no-deps --remove-orphans backend
+
+            # 이전 이미지 정리
+            docker image prune -f > /dev/null 2>&1 || true
+
+            # 헬스체크 (Spring Boot Actuator)
+            bash scripts/health-check.sh backend
+
+      - name: Send success notification
+        if: success()
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.MAIL_SERVER }}
+          server_port: ${{ secrets.MAIL_PORT }}
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          subject: "✅ [four-leaf] Backend 배포 성공"
+          body: |
+            Backend 배포가 성공적으로 완료되었습니다.
+
+            ━━━━━━━━━━━━━━━━━━━━━━━━━━
+            서비스:      Backend (Spring Boot)
+            이미지 태그: ${{ env.IMAGE_TAG }}
+            커밋 SHA:    ${{ env.SHA }}
+            배포자:      ${{ env.ACTOR }}
+            ━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+            트리거 워크플로우: ${{ env.TRIGGER_URL }}
+            CD 워크플로우:    ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          to: ${{ secrets.NOTIFY_EMAIL }}
+          from: ${{ secrets.MAIL_USERNAME }}
+
+      - name: Send failure notification
+        if: failure()
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.MAIL_SERVER }}
+          server_port: ${{ secrets.MAIL_PORT }}
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          subject: "❌ [four-leaf] Backend 배포 실패 — 즉시 확인 필요"
+          body: |
+            ⚠️ Backend 배포 중 오류가 발생했습니다.
+
+            ━━━━━━━━━━━━━━━━━━━━━━━━━━
+            서비스:      Backend (Spring Boot)
+            이미지 태그: ${{ env.IMAGE_TAG }}
+            커밋 SHA:    ${{ env.SHA }}
+            배포자:      ${{ env.ACTOR }}
+            ━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+            CD 워크플로우 로그 (원인 확인):
+            ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            롤백이 필요하다면:
+            Actions → Deploy Backend → Run workflow → 이전 SHA 입력
+          to: ${{ secrets.NOTIFY_EMAIL }}
+          from: ${{ secrets.MAIL_USERNAME }}

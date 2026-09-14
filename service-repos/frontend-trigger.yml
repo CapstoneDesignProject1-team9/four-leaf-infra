@@ -1,0 +1,90 @@
+# =============================================================
+# [four-laef-frontend 레포에 추가하는 파일]
+# 경로: .github/workflows/trigger-cd.yml
+#
+# main 브랜치 push 시:
+#   1. CI (Node.js build + lint) 통과
+#   2. Docker 이미지 빌드 & AWS ECR push
+#   3. four-leaf-infra 레포에 deploy-frontend 이벤트 dispatch
+#
+# 조직: CapstoneDesignProject1-team9
+# =============================================================
+
+name: Build & Trigger CD
+
+on:
+  push:
+    branches: [main]
+
+env:
+  AWS_REGION: ap-northeast-2
+  ECR_REPOSITORY: four-leaf-frontend
+
+jobs:
+  ci:
+    name: CI — Build & Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run lint --if-present
+      - run: npm run build
+        env:
+          VITE_API_BASE_URL: /api
+          VITE_AI_BASE_URL: /ai
+
+  build-and-trigger:
+    name: Build Docker Image & Trigger Infra CD
+    runs-on: ubuntu-latest
+    needs: ci
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push Docker image
+        id: build
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build \
+            -t $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:$IMAGE_TAG \
+            -t $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:latest \
+            .
+          docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:$IMAGE_TAG
+          docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:latest
+          echo "image=$ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:$IMAGE_TAG" >> $GITHUB_OUTPUT
+          echo "registry=$ECR_REGISTRY" >> $GITHUB_OUTPUT
+
+      - name: Trigger four-leaf-infra CD
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.INFRA_DISPATCH_TOKEN }}
+          repository: CapstoneDesignProject1-team9/four-leaf-infra
+          event-type: deploy-frontend
+          client-payload: |
+            {
+              "image_tag": "${{ github.sha }}",
+              "image_uri": "${{ steps.build.outputs.image }}",
+              "registry": "${{ steps.build.outputs.registry }}",
+              "sha": "${{ github.sha }}",
+              "ref": "${{ github.ref }}",
+              "actor": "${{ github.actor }}",
+              "run_url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            }

@@ -1,0 +1,121 @@
+name: Deploy All Services
+
+on:
+  # 전체 스택을 수동으로 재배포할 때 사용
+  workflow_dispatch:
+    inputs:
+      frontend_tag:
+        description: "Frontend image tag"
+        required: false
+        default: "latest"
+      backend_tag:
+        description: "Backend image tag"
+        required: false
+        default: "latest"
+      ai_tag:
+        description: "AI image tag"
+        required: false
+        default: "latest"
+
+env:
+  AWS_REGION: ap-northeast-2
+
+jobs:
+  deploy-all:
+    name: Deploy All Services to EC2
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout infra repo
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Get ECR registry
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Deploy all services to EC2
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          FRONTEND_TAG: ${{ github.event.inputs.frontend_tag || 'latest' }}
+          BACKEND_TAG: ${{ github.event.inputs.backend_tag || 'latest' }}
+          AI_TAG: ${{ github.event.inputs.ai_tag || 'latest' }}
+          AWS_REGION: ${{ env.AWS_REGION }}
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ secrets.DEPLOY_PORT || 22 }}
+          envs: ECR_REGISTRY,FRONTEND_TAG,BACKEND_TAG,AI_TAG,AWS_REGION
+          script: |
+            set -e
+            cd ~/four-leaf-infra
+
+            FRONTEND_IMAGE="${ECR_REGISTRY}/four-leaf-frontend:${FRONTEND_TAG}"
+            BACKEND_IMAGE="${ECR_REGISTRY}/four-leaf-backend:${BACKEND_TAG}"
+            AI_IMAGE="${ECR_REGISTRY}/four-leaf-ai:${AI_TAG}"
+
+            echo "▶ Frontend: $FRONTEND_IMAGE"
+            echo "▶ Backend:  $BACKEND_IMAGE"
+            echo "▶ AI:       $AI_IMAGE"
+
+            # ECR 로그인
+            aws ecr get-login-password --region "$AWS_REGION" | \
+              docker login --username AWS --password-stdin "$ECR_REGISTRY"
+
+            # .env 파일의 이미지 주소 일괄 업데이트 (원자적)
+            update_env() {
+              local key="$1"
+              local value="$2"
+              if grep -q "^${key}=" .env 2>/dev/null; then
+                sed -i "s|^${key}=.*|${key}=${value}|" .env
+              else
+                echo "${key}=${value}" >> .env
+              fi
+            }
+
+            update_env "FRONTEND_IMAGE" "$FRONTEND_IMAGE"
+            update_env "BACKEND_IMAGE"  "$BACKEND_IMAGE"
+            update_env "AI_IMAGE"       "$AI_IMAGE"
+
+            # 전체 스택 pull & 재시작
+            docker compose pull
+            docker compose up -d --remove-orphans
+
+            # 이전 이미지 정리
+            docker image prune -f > /dev/null 2>&1 || true
+
+            # 헬스체크 (15초 대기 후)
+            sleep 15
+            bash scripts/health-check.sh all
+
+      - name: Send result notification
+        if: always()
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.MAIL_SERVER }}
+          server_port: ${{ secrets.MAIL_PORT }}
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          subject: "${{ job.status == 'success' && '✅' || '❌' }} [four-leaf] 전체 스택 배포 ${{ job.status == 'success' && '성공' || '실패' }}"
+          body: |
+            전체 스택 배포 결과: ${{ job.status }}
+
+            ━━━━━━━━━━━━━━━━━━━━━━━━━━
+            Frontend tag: ${{ github.event.inputs.frontend_tag || 'latest' }}
+            Backend tag:  ${{ github.event.inputs.backend_tag  || 'latest' }}
+            AI tag:       ${{ github.event.inputs.ai_tag       || 'latest' }}
+            배포자:       ${{ github.actor }}
+            ━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+            워크플로우 로그:
+            ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          to: ${{ secrets.NOTIFY_EMAIL }}
+          from: ${{ secrets.MAIL_USERNAME }}

@@ -1,0 +1,145 @@
+services:
+  # ─────────────────────────────────────────
+  # Nginx — 리버스 프록시
+  # ─────────────────────────────────────────
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: four-leaf-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./docker/nginx/certs:/etc/nginx/certs:ro
+    depends_on:
+      - frontend
+      - backend
+      - ai
+    restart: unless-stopped
+    networks:
+      - four-leaf-net
+
+  # ─────────────────────────────────────────
+  # Frontend — React
+  # ─────────────────────────────────────────
+  frontend:
+    image: ${FRONTEND_IMAGE:-four-leaf/frontend:latest}
+    container_name: four-leaf-frontend
+    expose:
+      - "3000"
+    environment:
+      - NODE_ENV=production
+      - VITE_API_BASE_URL=/api
+      - VITE_AI_BASE_URL=/ai
+    env_file:
+      - .env
+    restart: unless-stopped
+    networks:
+      - four-leaf-net
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  # ─────────────────────────────────────────
+  # Backend — Spring Boot
+  # ─────────────────────────────────────────
+  backend:
+    image: ${BACKEND_IMAGE:-four-leaf/backend:latest}
+    container_name: four-leaf-backend
+    expose:
+      - "8080"
+    environment:
+      - SPRING_PROFILES_ACTIVE=prod
+      - SERVER_PORT=8080
+    env_file:
+      - .env
+    depends_on:
+      - db
+      - redis
+    restart: unless-stopped
+    networks:
+      - four-leaf-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # ─────────────────────────────────────────
+  # AI — Python / LangChain
+  # ─────────────────────────────────────────
+  ai:
+    image: ${AI_IMAGE:-four-leaf/ai:latest}
+    container_name: four-leaf-ai
+    expose:
+      - "8000"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - APP_ENV=production
+    env_file:
+      - .env
+    restart: unless-stopped
+    networks:
+      - four-leaf-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ─────────────────────────────────────────
+  # Database — PostgreSQL
+  # ─────────────────────────────────────────
+  db:
+    image: postgres:16-alpine
+    container_name: four-leaf-db
+    environment:
+      - POSTGRES_DB=${DB_NAME:-fourleaf}
+      - POSTGRES_USER=${DB_USER:-fourleaf}
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    expose:
+      - "5432"
+    restart: unless-stopped
+    networks:
+      - four-leaf-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-fourleaf}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─────────────────────────────────────────
+  # Redis — 캐시 / 세션
+  # ─────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: four-leaf-redis
+    command: redis-server --requirepass ${REDIS_PASSWORD}
+    volumes:
+      - redis-data:/data
+    expose:
+      - "6379"
+    restart: unless-stopped
+    networks:
+      - four-leaf-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres-data:
+  redis-data:
+
+networks:
+  four-leaf-net:
+    driver: bridge

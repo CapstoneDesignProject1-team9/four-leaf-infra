@@ -1,0 +1,103 @@
+# docker-compose.dev.yml — 로컬 개발 환경
+# 서비스 레포들을 형제 디렉토리에 clone하고 사용:
+#   ../four-leaf-frontend
+#   ../four-leaf-backend
+#   ../four-leaf-ai
+
+services:
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: four-leaf-nginx-dev
+    ports:
+      - "80:80"
+    volumes:
+      - ./docker/nginx/nginx.dev.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - frontend
+      - backend
+      - ai
+    networks:
+      - four-leaf-net
+
+  frontend:
+    build:
+      context: ../four-leaf-frontend
+      dockerfile: Dockerfile.dev
+    container_name: four-leaf-frontend-dev
+    expose:
+      - "3000"
+    volumes:
+      - ../four-leaf-frontend:/app
+      - /app/node_modules
+    environment:
+      - NODE_ENV=development
+      - VITE_API_BASE_URL=http://localhost/api
+      - VITE_AI_BASE_URL=http://localhost/ai
+    networks:
+      - four-leaf-net
+
+  backend:
+    build:
+      context: ../four-leaf-backend
+      dockerfile: Dockerfile
+    container_name: four-leaf-backend-dev
+    expose:
+      - "8080"
+    volumes:
+      - ../four-leaf-backend:/app
+      - ~/.gradle:/root/.gradle
+    environment:
+      - SPRING_PROFILES_ACTIVE=dev
+    env_file:
+      - .env.dev
+    depends_on:
+      - db
+      - redis
+    networks:
+      - four-leaf-net
+
+  ai:
+    build:
+      context: ../four-leaf-ai
+      dockerfile: Dockerfile
+    container_name: four-leaf-ai-dev
+    expose:
+      - "8000"
+    volumes:
+      - ../four-leaf-ai:/app
+    environment:
+      - PYTHONUNBUFFERED=1
+      - APP_ENV=development
+    env_file:
+      - .env.dev
+    networks:
+      - four-leaf-net
+
+  db:
+    image: postgres:16-alpine
+    container_name: four-leaf-db-dev
+    ports:
+      - "5432:5432"  # 로컬에서 직접 접속 가능
+    environment:
+      - POSTGRES_DB=fourleaf_dev
+      - POSTGRES_USER=fourleaf
+      - POSTGRES_PASSWORD=devpassword
+    volumes:
+      - postgres-dev-data:/var/lib/postgresql/data
+    networks:
+      - four-leaf-net
+
+  redis:
+    image: redis:7-alpine
+    container_name: four-leaf-redis-dev
+    ports:
+      - "6379:6379"  # 로컬에서 직접 접속 가능
+    networks:
+      - four-leaf-net
+
+volumes:
+  postgres-dev-data:
+
+networks:
+  four-leaf-net:
+    driver: bridge
