@@ -1,12 +1,11 @@
 # =============================================================
-# [four-leaf-backend 레포에 추가하는 파일]
+# [four-leaf-backend] CD 트리거
 # 경로: .github/workflows/trigger-cd.yml
 #
-# main 브랜치 push 시:
-#   1. CI (Gradle build + test) 통과
-#   2. JAR 빌드
-#   3. Docker 이미지 빌드 & AWS ECR push
-#   4. four-leaf-infra 레포에 deploy-backend 이벤트 dispatch
+# main 브랜치 push + CI 통과 시:
+#   1. Maven 빌드 & 테스트 (CI)
+#   2. Docker 이미지 빌드 & AWS ECR push
+#   3. four-leaf-infra 레포에 deploy-backend 이벤트 dispatch
 #
 # 조직: CapstoneDesignProject1-team9
 # =============================================================
@@ -18,76 +17,75 @@ on:
     branches: [main]
 
 env:
-  AWS_REGION: ap-northeast-2
-  ECR_REPOSITORY: four-leaf-backend
-  JAVA_VERSION: '21'
+  NCR_REGISTRY: my-ncr.kr.ncr.ntruss.com
+  IMAGE_NAME: four-leaf-backend
 
 jobs:
+  # ────────────────────────────────────────
+  # Step 1: CI (Maven 빌드 & 테스트)
+  # ────────────────────────────────────────
   ci:
-    name: CI — Gradle Build & Test
+    name: CI — Maven Build & Test
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
-        with:
-          java-version: ${{ env.JAVA_VERSION }}
-          distribution: temurin
-          cache: gradle
-      - run: chmod +x gradlew
-      - run: ./gradlew build --no-daemon
-        env:
-          SPRING_PROFILES_ACTIVE: test
-      - run: ./gradlew test --no-daemon
-        env:
-          SPRING_PROFILES_ACTIVE: test
-
-  build-and-trigger:
-    name: Build Docker Image & Trigger Infra CD
-    runs-on: ubuntu-latest
-    needs: ci
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up JDK ${{ env.JAVA_VERSION }}
+      - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
-          java-version: ${{ env.JAVA_VERSION }}
+          java-version: '21'
           distribution: temurin
-          cache: gradle
+          cache: maven
 
-      - name: Grant execute permission for gradlew
-        run: chmod +x gradlew
+      - name: Build and test
+        run: mvn verify -B
+        env:
+          SPRING_PROFILES_ACTIVE: test
 
-      - name: Build JAR (테스트 제외)
-        run: ./gradlew build -x test --no-daemon
+  # ────────────────────────────────────────
+  # Step 2: Docker 빌드 & ECR push & Infra dispatch
+  # ────────────────────────────────────────
+  build-and-trigger:
+    name: Build Docker Image & Trigger Infra CD
+    runs-on: ubuntu-latest
+    needs: ci   # CI 통과 후에만 실행
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21 (JAR 빌드용)
+        uses: actions/setup-java@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
+          java-version: '21'
+          distribution: temurin
+          cache: maven
 
-      - name: Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
+      - name: Package JAR (테스트 제외, 속도 최적화)
+        run: mvn package -DskipTests -B
+
+      - name: Login to NCP Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.NCR_REGISTRY }}
+          username: ${{ secrets.NCP_ACCESS_KEY }}
+          password: ${{ secrets.NCP_SECRET_KEY }}
 
       - name: Build and push Docker image
         id: build
         env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
           docker build \
-            -t $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:$IMAGE_TAG \
-            -t $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:latest \
+            -t ${{ env.NCR_REGISTRY }}/${{ env.IMAGE_NAME }}:$IMAGE_TAG \
+            -t ${{ env.NCR_REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
             .
-          docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:$IMAGE_TAG
-          docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:latest
-          echo "image=$ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:$IMAGE_TAG" >> $GITHUB_OUTPUT
-          echo "registry=$ECR_REGISTRY" >> $GITHUB_OUTPUT
+          docker push ${{ env.NCR_REGISTRY }}/${{ env.IMAGE_NAME }}:$IMAGE_TAG
+          docker push ${{ env.NCR_REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          echo "image=${{ env.NCR_REGISTRY }}/${{ env.IMAGE_NAME }}:$IMAGE_TAG" >> $GITHUB_OUTPUT
+          echo "registry=${{ env.NCR_REGISTRY }}" >> $GITHUB_OUTPUT
 
       - name: Trigger four-leaf-infra CD
         uses: peter-evans/repository-dispatch@v3

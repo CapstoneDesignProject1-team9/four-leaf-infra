@@ -1,11 +1,10 @@
 # =============================================================
-# [four-laef-frontend 레포에 추가하는 파일]
+# [four-laef-frontend] CD 트리거
 # 경로: .github/workflows/trigger-cd.yml
 #
-# main 브랜치 push 시:
-#   1. CI (Node.js build + lint) 통과
-#   2. Docker 이미지 빌드 & AWS ECR push
-#   3. four-leaf-infra 레포에 deploy-frontend 이벤트 dispatch
+# main 브랜치 push + CI 통과 시:
+#   1. Docker 이미지 빌드 & AWS ECR push
+#   2. four-leaf-infra 레포에 deploy-frontend 이벤트 dispatch
 #
 # 조직: CapstoneDesignProject1-team9
 # =============================================================
@@ -17,60 +16,76 @@ on:
     branches: [main]
 
 env:
-  AWS_REGION: ap-northeast-2
-  ECR_REPOSITORY: four-leaf-frontend
+  NCR_REGISTRY: my-ncr.kr.ncr.ntruss.com  # 네이버클라우드 컨테이너 레지스트리 엔드포인트
+  IMAGE_NAME: four-leaf-frontend
 
 jobs:
+  # ────────────────────────────────────────
+  # Step 1: CI (빌드 & 린트 검증)
+  # ────────────────────────────────────────
   ci:
     name: CI — Build & Lint
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-      - run: npm ci
-      - run: npm run lint --if-present
-      - run: npm run build
-        env:
-          VITE_API_BASE_URL: /api
-          VITE_AI_BASE_URL: /ai
-
-  build-and-trigger:
-    name: Build Docker Image & Trigger Infra CD
-    runs-on: ubuntu-latest
-    needs: ci
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
+          node-version: '20'
+          cache: ${{ hashFiles('package-lock.json') != '' && 'npm' || '' }}
 
-      - name: Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Lint (oxlint)
+        run: npm run lint
+
+      - name: Type check (tsc)
+        run: npx tsc --noEmit
+
+      - name: Build
+        run: npm run build
+        env:
+          VITE_API_BASE_URL: /api
+          VITE_AI_BASE_URL: /ai
+
+  # ────────────────────────────────────────
+  # Step 2: Docker 빌드 & ECR push & Infra dispatch
+  # ────────────────────────────────────────
+  build-and-trigger:
+    name: Build Docker Image & Trigger Infra CD
+    runs-on: ubuntu-latest
+    needs: ci   # CI 통과 후에만 실행
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Login to NCP Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.NCR_REGISTRY }}
+          username: ${{ secrets.NCP_ACCESS_KEY }}
+          password: ${{ secrets.NCP_SECRET_KEY }}
 
       - name: Build and push Docker image
         id: build
         env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
           docker build \
-            -t $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:$IMAGE_TAG \
-            -t $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:latest \
+            --build-arg VITE_API_BASE_URL=/api \
+            --build-arg VITE_AI_BASE_URL=/ai \
+            -t ${{ env.NCR_REGISTRY }}/${{ env.IMAGE_NAME }}:$IMAGE_TAG \
+            -t ${{ env.NCR_REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
             .
-          docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:$IMAGE_TAG
-          docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:latest
-          echo "image=$ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:$IMAGE_TAG" >> $GITHUB_OUTPUT
-          echo "registry=$ECR_REGISTRY" >> $GITHUB_OUTPUT
+          docker push ${{ env.NCR_REGISTRY }}/${{ env.IMAGE_NAME }}:$IMAGE_TAG
+          docker push ${{ env.NCR_REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          echo "image=${{ env.NCR_REGISTRY }}/${{ env.IMAGE_NAME }}:$IMAGE_TAG" >> $GITHUB_OUTPUT
+          echo "registry=${{ env.NCR_REGISTRY }}" >> $GITHUB_OUTPUT
 
       - name: Trigger four-leaf-infra CD
         uses: peter-evans/repository-dispatch@v3
