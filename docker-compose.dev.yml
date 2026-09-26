@@ -9,7 +9,7 @@
 # 폴더 구조 가정:
 #   네잎클로바/
 #   ├── four-leaf-infra/     ← 이 파일 위치
-#   ├── four-laef-frontend/
+#   ├── four-leaf-frontend/
 #   ├── four-leaf-backend/
 #   └── four-leaf-AI/
 
@@ -36,13 +36,13 @@ services:
   # ─────────────────────────────────────────
   frontend:
     build:
-      context: ../four-laef-frontend   # 실제 레포 폴더명 (오타 포함)
+      context: ../four-leaf-frontend   # 실제 레포 폴더명 (오타 포함)
       dockerfile: Dockerfile.dev        # 개발용 (Vite dev server)
     container_name: four-leaf-frontend-dev
     expose:
       - "3000"
     volumes:
-      - ../four-laef-frontend:/app      # Hot Reload를 위한 소스 마운트
+      - ../four-leaf-frontend:/app      # Hot Reload를 위한 소스 마운트
       - /app/node_modules               # 컨테이너 내부 node_modules 보호
     environment:
       - NODE_ENV=development

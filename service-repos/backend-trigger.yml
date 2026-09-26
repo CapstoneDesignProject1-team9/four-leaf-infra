@@ -17,7 +17,7 @@ on:
     branches: [main]
 
 env:
-  NCR_REGISTRY: my-ncr.kr.ncr.ntruss.com
+  AWS_REGION: ap-northeast-2
   IMAGE_NAME: four-leaf-backend
 
 jobs:
@@ -66,26 +66,31 @@ jobs:
       - name: Package JAR (테스트 제외, 속도 최적화)
         run: mvn package -DskipTests -B
 
-      - name: Login to NCP Container Registry
-        uses: docker/login-action@v3
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          registry: ${{ env.NCR_REGISTRY }}
-          username: ${{ secrets.NCP_ACCESS_KEY }}
-          password: ${{ secrets.NCP_SECRET_KEY }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
 
       - name: Build and push Docker image
         id: build
         env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
           docker build \
-            -t ${{ env.NCR_REGISTRY }}/${{ env.IMAGE_NAME }}:$IMAGE_TAG \
-            -t ${{ env.NCR_REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
+            -t $ECR_REGISTRY/${{ env.IMAGE_NAME }}:$IMAGE_TAG \
+            -t $ECR_REGISTRY/${{ env.IMAGE_NAME }}:latest \
             .
-          docker push ${{ env.NCR_REGISTRY }}/${{ env.IMAGE_NAME }}:$IMAGE_TAG
-          docker push ${{ env.NCR_REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-          echo "image=${{ env.NCR_REGISTRY }}/${{ env.IMAGE_NAME }}:$IMAGE_TAG" >> $GITHUB_OUTPUT
-          echo "registry=${{ env.NCR_REGISTRY }}" >> $GITHUB_OUTPUT
+          docker push $ECR_REGISTRY/${{ env.IMAGE_NAME }}:$IMAGE_TAG
+          docker push $ECR_REGISTRY/${{ env.IMAGE_NAME }}:latest
+          echo "image=$ECR_REGISTRY/${{ env.IMAGE_NAME }}:$IMAGE_TAG" >> $GITHUB_OUTPUT
+          echo "registry=$ECR_REGISTRY" >> $GITHUB_OUTPUT
 
       - name: Trigger four-leaf-infra CD
         uses: peter-evans/repository-dispatch@v3

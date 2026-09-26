@@ -2,7 +2,7 @@
 
 > **Four-Leaf** 프로젝트의 인프라 & CD(Continuous Deployment) 레포지토리입니다.  
 > 각 서비스 레포에서 CI(빌드/테스트/린트) 통과 후 `main` 브랜치에 push가 발생하면  
-> 자동으로 **네이버클라우드 Container Registry(NCR)**에 이미지를 push하고 **NCP Server**에 배포됩니다.
+> 자동으로 **AWS ECR(Elastic Container Registry)**에 이미지를 push하고 **EC2**에 배포됩니다.
 
 ---
 
@@ -22,7 +22,7 @@
 
 ---
 
-## 🏗 아키텍처 (Naver Cloud Platform 중심)
+## 🏗 아키텍처 (AWS 중심)
 
 ```
 [GitHub Organization: CapstoneDesignProject1-team9]
@@ -30,25 +30,25 @@
  four-laef-frontend  (React/Vite)
    └── push to main
          ├── CI: npm build + lint                     ← ci.yml
-         └── CD trigger: NCR push → dispatch ─────────────────┐
+         └── CD trigger: ECR push → dispatch ─────────────────┐
                                                                 │ repository_dispatch
  four-leaf-backend  (Spring Boot)                              │
    └── push to main                                            │
          ├── CI: Gradle build + test                 ← ci.yml  │
-         └── CD trigger: NCR push → dispatch ─────────────────►│
+         └── CD trigger: ECR push → dispatch ─────────────────►│
                                                                 │
  four-leaf-AI  (Python/LangChain + HyperCLOVA X)               │
    └── push to main                                            │
          ├── CI: ruff lint + pytest                  ← ci.yml  │
-         └── CD trigger: NCR push → dispatch ─────────────────►│
+         └── CD trigger: ECR push → dispatch ─────────────────►│
                                                                 ▼
                                                     [four-leaf-infra]
                                                     deploy-*.yml
-                                                    NCP Server SSH → NCR Login → docker compose up
+                                                    EC2 SSH → ECR Login → docker compose up
 ```
 
 ```
-NCP Server (Ubuntu)
+AWS EC2 (Ubuntu)
 ┌──────────────────────────────────────┐
 │  Nginx (80 / 443)                    │
 │   ├── /        → Frontend  :3000     │
@@ -104,7 +104,7 @@ four-leaf-infra/
 
 ## 🛠 사전 준비
 
-### NCP Server 초기 설정 (최초 1회)
+### EC2 초기 설정 (최초 1회)
 
 ```bash
 # 1. Docker & Docker Compose 설치
@@ -112,18 +112,23 @@ curl -fsSL https://get.docker.com | sh
 sudo usermod -aG docker $USER
 newgrp docker
 
-# 2. infra 레포 clone
+# 2. AWS CLI 설치
+curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+unzip awscliv2.zip && sudo ./aws/install
+aws configure   # Access Key, Secret Key, Region 입력
+
+# 3. infra 레포 clone
 git clone https://github.com/CapstoneDesignProject1-team9/four-leaf-infra.git ~/four-leaf-infra
 cd ~/four-leaf-infra
 
-# 3. 환경변수 파일 설정
+# 4. 환경변수 파일 설정
 cp .env.example .env
 nano .env   # 실제 값 입력
 ```
 
-### NCP Container Registry 생성 (최초 1회)
+### AWS ECR 리포지토리 생성 (최초 1회)
 
-네이버클라우드 콘솔 → **Container Registry** 에서 레지스트리(예: `my-ncr`) 생성 후 각 이미지 리포지토리 생성.
+AWS 콘솔 → **ECR** → **Create repository** 에서 각 이미지 리포지토리 생성.
 - `four-leaf-frontend`
 - `four-leaf-backend`
 - `four-leaf-ai`
@@ -138,12 +143,13 @@ nano .env   # 실제 값 입력
 
 | Secret 이름 | 값 예시 | 설명 |
 |------------|---------|------|
-| `DEPLOY_HOST` | `211.xxx.xxx.xxx` | NCP Server 공인 IP |
-| `DEPLOY_USER` | `root` (또는 지정유저) | SSH 접속 유저명 |
+| `DEPLOY_HOST` | `3.xxx.xxx.xxx` | EC2 공인 IP |
+| `DEPLOY_USER` | `ubuntu` (또는 ec2-user) | SSH 접속 유저명 |
 | `DEPLOY_SSH_KEY` | `-----BEGIN OPENSSH...` | SSH private key 전체 내용 |
 | `DEPLOY_PORT` | `22` | SSH 포트 |
-| `NCP_ACCESS_KEY` | `...` | 네이버클라우드 API 인증키 (Access Key) |
-| `NCP_SECRET_KEY` | `...` | 네이버클라우드 API 인증키 (Secret Key) |
+| `AWS_ACCESS_KEY_ID` | `AKIA...` | AWS IAM Access Key |
+| `AWS_SECRET_ACCESS_KEY` | `...` | AWS IAM Secret Key |
+| `AWS_REGION` | `ap-northeast-2` | AWS 리전 (서울) |
 | `MAIL_SERVER` | `smtp.gmail.com` | SMTP 서버 |
 | `MAIL_PORT` | `587` | SMTP 포트 |
 | `MAIL_USERNAME` | `noreply@example.com` | 발신 이메일 |
@@ -153,7 +159,7 @@ nano .env   # 실제 값 입력
 > **SSH 키 생성:**
 > ```bash
 > ssh-keygen -t ed25519 -C "four-leaf-deploy" -f ~/.ssh/four-leaf-deploy
-> # 공개키를 NCP Server에 등록
+> # 공개키를 EC2에 등록
 > cat ~/.ssh/four-leaf-deploy.pub >> ~/.ssh/authorized_keys   # (서버에서 실행)
 > # 비밀키를 DEPLOY_SSH_KEY Secret에 등록
 > cat ~/.ssh/four-leaf-deploy   # 이 내용 전체를 복사
@@ -165,8 +171,8 @@ nano .env   # 실제 값 입력
 
 | Secret 이름 | 설명 |
 |------------|------|
-| `NCP_ACCESS_KEY` | NCR push 권한 |
-| `NCP_SECRET_KEY` | NCR push 권한 |
+| `AWS_ACCESS_KEY_ID` | ECR push 권한 |
+| `AWS_SECRET_ACCESS_KEY` | ECR push 권한 |
 | `INFRA_DISPATCH_TOKEN` | infra 레포에 `repo` 권한 있는 PAT |
 
 > **INFRA_DISPATCH_TOKEN 발급:**  
@@ -182,7 +188,7 @@ nano .env   # 실제 값 입력
 | 파일 | 역할 |
 |------|------|
 | `.github/workflows/ci.yml` | PR/push 시 CI (빌드, 테스트, 린트) |
-| `.github/workflows/trigger-cd.yml` | main push 시 CI → NCR push → infra dispatch |
+| `.github/workflows/trigger-cd.yml` | main push 시 CI → ECR push → infra dispatch |
 
 > Secrets만 등록하면 바로 동작합니다.
 
@@ -204,13 +210,13 @@ nano .env   # 실제 값 입력
          ▼
 3. trigger-cd.yml 실행 (needs: ci)
    - Docker image build
-   - NCP NCR push (SHA tag + latest)
+   - AWS ECR push (SHA tag + latest)
    - repository_dispatch → four-leaf-infra
          │
          ▼
 4. four-leaf-infra deploy-*.yml 실행
-   - NCP Server SSH 접속
-   - NCR 이미지 pull
+   - EC2 SSH 접속
+   - ECR 이미지 pull
    - .env 파일 IMAGE 주소 업데이트 (sed, 원자적)
    - docker compose up -d --no-deps
    - health-check.sh 실행
@@ -273,12 +279,12 @@ docker compose -f docker-compose.dev.yml down
 
 | Secret | infra | frontend | backend | AI | 설명 |
 |--------|:-----:|:--------:|:-------:|:--:|------|
-| `DEPLOY_HOST` | ✅ | | | | NCP Server IP |
+| `DEPLOY_HOST` | ✅ | | | | EC2 IP |
 | `DEPLOY_USER` | ✅ | | | | SSH 유저 |
 | `DEPLOY_SSH_KEY` | ✅ | | | | SSH private key |
 | `DEPLOY_PORT` | ✅ | | | | SSH 포트 |
-| `NCP_ACCESS_KEY` | ✅ | ✅ | ✅ | ✅ | NCP Access Key |
-| `NCP_SECRET_KEY` | ✅ | ✅ | ✅ | ✅ | NCP Secret Key |
+| `AWS_ACCESS_KEY_ID` | ✅ | ✅ | ✅ | ✅ | AWS Access Key |
+| `AWS_SECRET_ACCESS_KEY` | ✅ | ✅ | ✅ | ✅ | AWS Secret Key |
 | `MAIL_SERVER` | ✅ | | | | SMTP 서버 |
 | `MAIL_PORT` | ✅ | | | | SMTP 포트 |
 | `MAIL_USERNAME` | ✅ | | | | 발신 메일 |

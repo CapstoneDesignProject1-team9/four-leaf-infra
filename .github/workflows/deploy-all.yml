@@ -17,6 +17,8 @@ on:
         required: false
         default: "latest"
 
+env:
+  AWS_REGION: ap-northeast-2
 
 jobs:
   deploy-all:
@@ -27,6 +29,16 @@ jobs:
       - name: Checkout infra repo
         uses: actions/checkout@v4
 
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
 
       - name: Deploy all services to EC2
         uses: appleboy/ssh-action@v1.0.3
@@ -35,13 +47,15 @@ jobs:
           FRONTEND_TAG: ${{ github.event.inputs.frontend_tag || 'latest' }}
           BACKEND_TAG: ${{ github.event.inputs.backend_tag || 'latest' }}
           AI_TAG: ${{ github.event.inputs.ai_tag || 'latest' }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_REGION: ${{ env.AWS_REGION }}
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           port: ${{ secrets.DEPLOY_PORT || 22 }}
-          envs: ECR_REGISTRY,FRONTEND_TAG,BACKEND_TAG,AI_TAG,AWS_REGION
+          envs: ECR_REGISTRY,FRONTEND_TAG,BACKEND_TAG,AI_TAG,AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY,AWS_REGION
           script: |
             set -e
             cd ~/four-leaf-infra
