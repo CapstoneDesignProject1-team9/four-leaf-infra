@@ -1,1 +1,7 @@
+<<<<<<< HEAD
 .env
+=======
+.env
+.env.dev
+.env.local
+>>>>>>> 54d401cd382cd7e7be1ce8d1b0c5f5b6deed0dc2
