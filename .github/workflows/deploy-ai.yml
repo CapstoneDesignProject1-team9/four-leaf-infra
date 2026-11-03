@@ -59,15 +59,27 @@ jobs:
           AWS_REGION: ${{ env.AWS_REGION }}
           IMAGE_NAME: four-leaf-ai
           IMAGE_TAG: ${{ env.IMAGE_TAG }}
+          AI_RAG_S3_URI: ${{ secrets.AI_RAG_S3_URI }}
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           port: ${{ secrets.DEPLOY_PORT || 22 }}
-          envs: ECR_REGISTRY,AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY,AWS_REGION,IMAGE_NAME,IMAGE_TAG
+          envs: ECR_REGISTRY,AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY,AWS_REGION,IMAGE_NAME,IMAGE_TAG,AI_RAG_S3_URI
           script: |
             set -e
             cd ~/four-leaf-infra
+
+            : "${AI_RAG_S3_URI:?Set the infra repository secret AI_RAG_S3_URI to the S3 prefix containing the Chroma indexes}"
+
+            # Sync only the compact Chroma indexes. The embedding model is downloaded
+            # from Hugging Face on first start and kept in the persistent host cache.
+            mkdir -p ai-data/vectorstores ai-data/embedding_models
+            aws s3 sync "$AI_RAG_S3_URI" ai-data/vectorstores
+            test -f ai-data/vectorstores/knu_notice_bge_m3/chroma.sqlite3 || {
+              echo "Missing required Chroma index: knu_notice_bge_m3/chroma.sqlite3" >&2
+              exit 1
+            }
 
             NEW_IMAGE="${ECR_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}"
             echo "▶ 배포할 이미지: $NEW_IMAGE"
@@ -83,6 +95,17 @@ jobs:
               echo "AI_IMAGE=${NEW_IMAGE}" >> .env
             fi
 
+            # Match the bind-mounted cache/index ownership to the remote deploy user.
+            for KEY_VALUE in "AI_CONTAINER_UID=$(id -u)" "AI_CONTAINER_GID=$(id -g)"; do
+              KEY="${KEY_VALUE%%=*}"
+              VALUE="${KEY_VALUE#*=}"
+              if grep -q "^${KEY}=" .env 2>/dev/null; then
+                sed -i "s|^${KEY}=.*|${KEY}=${VALUE}|" .env
+              else
+                echo "${KEY}=${VALUE}" >> .env
+              fi
+            done
+
             # 새 이미지 pull & 서비스 재시작
             docker compose pull ai
             docker compose up -d --no-deps --remove-orphans ai
@@ -93,53 +116,3 @@ jobs:
             # 헬스체크
             bash scripts/health-check.sh ai
 
-      - name: Send success notification
-        if: success()
-        uses: dawidd6/action-send-mail@v3
-        with:
-          server_address: ${{ secrets.MAIL_SERVER }}
-          server_port: ${{ secrets.MAIL_PORT }}
-          username: ${{ secrets.MAIL_USERNAME }}
-          password: ${{ secrets.MAIL_PASSWORD }}
-          subject: "✅ [four-leaf] AI 서비스 배포 성공"
-          body: |
-            AI 서비스 배포가 성공적으로 완료되었습니다.
-
-            ━━━━━━━━━━━━━━━━━━━━━━━━━━
-            서비스:      AI (Python / LangChain)
-            이미지 태그: ${{ env.IMAGE_TAG }}
-            커밋 SHA:    ${{ env.SHA }}
-            배포자:      ${{ env.ACTOR }}
-            ━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-            트리거 워크플로우: ${{ env.TRIGGER_URL }}
-            CD 워크플로우:    ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          to: ${{ secrets.NOTIFY_EMAIL }}
-          from: ${{ secrets.MAIL_USERNAME }}
-
-      - name: Send failure notification
-        if: failure()
-        uses: dawidd6/action-send-mail@v3
-        with:
-          server_address: ${{ secrets.MAIL_SERVER }}
-          server_port: ${{ secrets.MAIL_PORT }}
-          username: ${{ secrets.MAIL_USERNAME }}
-          password: ${{ secrets.MAIL_PASSWORD }}
-          subject: "❌ [four-leaf] AI 서비스 배포 실패 — 즉시 확인 필요"
-          body: |
-            ⚠️ AI 서비스 배포 중 오류가 발생했습니다.
-
-            ━━━━━━━━━━━━━━━━━━━━━━━━━━
-            서비스:      AI (Python / LangChain)
-            이미지 태그: ${{ env.IMAGE_TAG }}
-            커밋 SHA:    ${{ env.SHA }}
-            배포자:      ${{ env.ACTOR }}
-            ━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-            CD 워크플로우 로그 (원인 확인):
-            ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-
-            롤백이 필요하다면:
-            Actions → Deploy AI → Run workflow → 이전 SHA 입력
-          to: ${{ secrets.NOTIFY_EMAIL }}
-          from: ${{ secrets.MAIL_USERNAME }}

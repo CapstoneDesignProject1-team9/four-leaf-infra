@@ -98,26 +98,3 @@ jobs:
             sleep 15
             bash scripts/health-check.sh all
 
-      - name: Send result notification
-        if: always()
-        uses: dawidd6/action-send-mail@v3
-        with:
-          server_address: ${{ secrets.MAIL_SERVER }}
-          server_port: ${{ secrets.MAIL_PORT }}
-          username: ${{ secrets.MAIL_USERNAME }}
-          password: ${{ secrets.MAIL_PASSWORD }}
-          subject: "${{ job.status == 'success' && '✅' || '❌' }} [four-leaf] 전체 스택 배포 ${{ job.status == 'success' && '성공' || '실패' }}"
-          body: |
-            전체 스택 배포 결과: ${{ job.status }}
-
-            ━━━━━━━━━━━━━━━━━━━━━━━━━━
-            Frontend tag: ${{ github.event.inputs.frontend_tag || 'latest' }}
-            Backend tag:  ${{ github.event.inputs.backend_tag  || 'latest' }}
-            AI tag:       ${{ github.event.inputs.ai_tag       || 'latest' }}
-            배포자:       ${{ github.actor }}
-            ━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-            워크플로우 로그:
-            ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          to: ${{ secrets.NOTIFY_EMAIL }}
-          from: ${{ secrets.MAIL_USERNAME }}

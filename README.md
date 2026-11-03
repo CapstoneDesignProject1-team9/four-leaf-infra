@@ -150,11 +150,6 @@ AWS 콘솔 → **ECR** → **Create repository** 에서 각 이미지 리포지�
 | `AWS_ACCESS_KEY_ID` | `AKIA...` | AWS IAM Access Key |
 | `AWS_SECRET_ACCESS_KEY` | `...` | AWS IAM Secret Key |
 | `AWS_REGION` | `ap-northeast-2` | AWS 리전 (서울) |
-| `MAIL_SERVER` | `smtp.gmail.com` | SMTP 서버 |
-| `MAIL_PORT` | `587` | SMTP 포트 |
-| `MAIL_USERNAME` | `noreply@example.com` | 발신 이메일 |
-| `MAIL_PASSWORD` | `앱 비밀번호` | Gmail 앱 비밀번호 |
-| `NOTIFY_EMAIL` | `team@example.com` | 수신 이메일 |
 
 > **SSH 키 생성:**
 > ```bash
@@ -285,9 +280,4 @@ docker compose -f docker-compose.dev.yml down
 | `DEPLOY_PORT` | ✅ | | | | SSH 포트 |
 | `AWS_ACCESS_KEY_ID` | ✅ | ✅ | ✅ | ✅ | AWS Access Key |
 | `AWS_SECRET_ACCESS_KEY` | ✅ | ✅ | ✅ | ✅ | AWS Secret Key |
-| `MAIL_SERVER` | ✅ | | | | SMTP 서버 |
-| `MAIL_PORT` | ✅ | | | | SMTP 포트 |
-| `MAIL_USERNAME` | ✅ | | | | 발신 메일 |
-| `MAIL_PASSWORD` | ✅ | | | | 메일 비밀번호 |
-| `NOTIFY_EMAIL` | ✅ | | | | 수신 메일 |
 | `INFRA_DISPATCH_TOKEN` | | ✅ | ✅ | ✅ | infra repo PAT |

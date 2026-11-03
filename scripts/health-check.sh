@@ -32,21 +32,27 @@ check_service() {
     local name=$1
     local url=$2
     local retries=0
+    local max_retries=$MAX_RETRIES
 
-    log_info "${name} 헬스체크 시작... (최대 $((MAX_RETRIES * INTERVAL))초 대기)"
+    # First AI startup may fetch the pinned embedding model from Hugging Face.
+    if [ "$name" = "AI" ]; then
+        max_retries=60
+    fi
 
-    while [ $retries -lt $MAX_RETRIES ]; do
+    log_info "${name} 헬스체크 시작... (최대 $((max_retries * INTERVAL))초 대기)"
+
+    while [ $retries -lt $max_retries ]; do
         if curl -sf --max-time "$TIMEOUT" "$url" > /dev/null 2>&1; then
             log_success "${name} 헬스체크 통과 ✅"
             return 0
         fi
 
         retries=$((retries + 1))
-        log_info "${name} 응답 없음. 재시도 ${retries}/${MAX_RETRIES} (${INTERVAL}초 후)..."
+        log_info "${name} 응답 없음. 재시도 ${retries}/${max_retries} (${INTERVAL}초 후)..."
         sleep "$INTERVAL"
     done
 
-    log_error "${name} 헬스체크 실패 ❌ (${MAX_RETRIES}회 재시도 초과)"
+    log_error "${name} 헬스체크 실패 ❌ (${max_retries}회 재시도 초과)"
     return 1
 }
 

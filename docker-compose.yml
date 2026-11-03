@@ -75,6 +75,7 @@ services:
   ai:
     image: ${AI_IMAGE:-four-leaf/ai:latest}
     container_name: four-leaf-ai
+    user: "${AI_CONTAINER_UID:-1000}:${AI_CONTAINER_GID:-1000}"
     expose:
       - "8000"
     environment:
@@ -87,6 +88,11 @@ services:
       - DB_PASSWORD=${DB_PASSWORD}
     env_file:
       - .env
+    volumes:
+      # Keep the compact RAG indexes and first-download model cache on the EC2 disk.
+      # This avoids baking multi-GB model files into every application image.
+      - ./ai-data/vectorstores:/app/knowledge/vectorstores
+      - ./ai-data/embedding_models:/app/.cache/embedding_models
     depends_on:
       db:
         condition: service_healthy
@@ -98,7 +104,8 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 30s
+      # The first start downloads the pinned BGE-M3 snapshot into the persistent cache.
+      start_period: 600s
 
   # ─────────────────────────────────────────
   # Database — PostgreSQL
