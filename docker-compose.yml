@@ -7,10 +7,8 @@ services:
     container_name: four-leaf-nginx
     ports:
       - "80:80"
-      - "443:443"
     volumes:
       - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./docker/nginx/certs:/etc/nginx/certs:ro
     depends_on:
       - frontend
       - backend
@@ -25,12 +23,10 @@ services:
   frontend:
     image: ${FRONTEND_IMAGE:-four-leaf/frontend:latest}
     container_name: four-leaf-frontend
-    expose:
-      - "3000"
+    ports:
+      - "127.0.0.1:3000:3000"  # 호스트 health-check.sh용. 외부에는 nginx만 공개한다.
     environment:
       - NODE_ENV=production
-      - VITE_API_BASE_URL=/api
-      - VITE_AI_BASE_URL=/ai
     env_file:
       - .env
     restart: unless-stopped
@@ -49,21 +45,26 @@ services:
   backend:
     image: ${BACKEND_IMAGE:-four-leaf/backend:latest}
     container_name: four-leaf-backend
-    expose:
-      - "8080"
+    ports:
+      - "127.0.0.1:8080:8080"
+    env_file:
+      - .env
+    # environment가 env_file보다 우선한다. DB 접속 정보는 DB_* 한 곳에서만 관리한다.
     environment:
       - SPRING_PROFILES_ACTIVE=prod
       - SERVER_PORT=8080
-    env_file:
-      - .env
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://db:5432/${DB_NAME:-fourleaf}
+      - SPRING_DATASOURCE_USERNAME=${DB_USER:-fourleaf}
+      - SPRING_DATASOURCE_PASSWORD=${DB_PASSWORD}
+      - AI_SERVICE_URL=http://ai:8000
     depends_on:
-      - db
-      
+      db:
+        condition: service_healthy
     restart: unless-stopped
     networks:
       - four-leaf-net
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/actuator/health"]
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/actuator/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -76,11 +77,10 @@ services:
     image: ${AI_IMAGE:-four-leaf/ai:latest}
     container_name: four-leaf-ai
     user: "${AI_CONTAINER_UID:-1000}:${AI_CONTAINER_GID:-1000}"
-    expose:
-      - "8000"
+    ports:
+      - "127.0.0.1:8000:8000"
     environment:
       - PYTHONUNBUFFERED=1
-      - APP_ENV=production
       - DB_HOST=db
       - DB_PORT=5432
       - DB_NAME=${DB_NAME:-fourleaf}
@@ -100,7 +100,7 @@ services:
     networks:
       - four-leaf-net
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -134,7 +134,6 @@ services:
 
 volumes:
   postgres-data:
-  redis-data:
 
 networks:
   four-leaf-net:
