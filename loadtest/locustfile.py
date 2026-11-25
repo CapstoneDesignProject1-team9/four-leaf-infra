@@ -29,6 +29,13 @@ QUESTIONS = [
 ]
 
 
+ERROR_PREFIXES = (
+    "AI 모델을 준비하고 있어요",
+    "AI 응답을 불러오지 못했습니다",
+    "현재 AI 서비스 점검 중",
+)
+
+
 class HelloUser(HttpUser):
     wait_time = between(0.5, 1)
 
@@ -53,7 +60,11 @@ class ChatUser(HttpUser):
             timeout=130,
             catch_response=True,
         ) as res:
+            answer = (res.json().get("answer") or "").strip() if res.status_code == 200 else ""
             if res.status_code != 200:
                 res.failure(f"HTTP {res.status_code}")
-            elif not (res.json().get("answer") or "").strip():
+            elif not answer:
                 res.failure("빈 답변")
+            # 백엔드는 AI 오류(503·타임아웃)도 200 + 안내 문구로 돌려준다.
+            elif answer.startswith(ERROR_PREFIXES):
+                res.failure(answer[:30])
