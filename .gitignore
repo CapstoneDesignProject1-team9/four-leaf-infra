@@ -4,3 +4,4 @@
 .env.*
 !.env.example
 ai-data/
+__pycache__/
